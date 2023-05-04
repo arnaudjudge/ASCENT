@@ -436,7 +436,8 @@ class Preprocessd(MapTransform):
                 if "label" in self.keys:
                     label = label.cpu().detach().numpy()
                     label = resample_label(label, resample_shape, anisotropy_flag, axis, 1, 0)
-
+            else:
+                image_meta_dict["spacing_after_resampling"] = image_meta_dict.get("original_spacing")
         image_meta_dict["anisotropy_flag"] = anisotropy_flag
 
         if self.do_normalize:
