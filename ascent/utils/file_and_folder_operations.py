@@ -3,7 +3,7 @@ import os
 import pickle  # nosec B403
 from pathlib import Path
 from typing import List
-
+import glob
 
 def load_pickle(file: str, mode: str = "rb"):  # nosec B301
     with open(file, mode) as f:
@@ -60,6 +60,14 @@ def subfiles(
         and (prefix is None or i.startswith(prefix))
         and (suffix is None or i.endswith(suffix))
     ]
+    # recursive in structure of folder
+    # res = [l(folder, os.path.relpath(i, folder))
+    #        for i in glob.iglob(folder + '**/**', recursive=True)
+    #        if os.path.isfile(i)
+    #        and (prefix is None or i.startswith(prefix))
+    #        and (suffix is None or i.endswith(suffix))
+    # ]
+    # res = list(set(res))
     if sort:
         res.sort()
     return res
