@@ -8,7 +8,7 @@ from ascent.models.nnunet_reg_module import nnUNetRegLitModule
 
 
 class nnUNetDealiasLitModule(nnUNetRegLitModule):
-    """nnUNet lightning module for deep unfolding to perform dealiasing.
+    """`nnUNet` lightning module for deep unfolding to perform dealiasing.
 
     Similar to nnUNetRegLitModule except for the definition of class's variables: threeD,
     patch_size, num_classes as the U-Net is no longer equals self.net but self.net.denoiser.
@@ -65,8 +65,8 @@ if __name__ == "__main__":
     import omegaconf
     import pyrootutils
     from hydra import compose, initialize
+    from lightning import Callback, LightningDataModule, LightningModule, Trainer
     from omegaconf import OmegaConf
-    from pytorch_lightning import Callback, LightningDataModule, LightningModule, Trainer
 
     from ascent import utils
 

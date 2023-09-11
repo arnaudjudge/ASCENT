@@ -2,11 +2,11 @@ from abc import ABC
 from typing import List, Tuple
 
 import hydra
-import pytorch_lightning as pl
+import lightning as pl
 import torch
+from lightning import Callback, LightningDataModule, LightningModule, Trainer
+from lightning.pytorch.loggers import CometLogger, Logger
 from omegaconf import DictConfig
-from pytorch_lightning import Callback, LightningDataModule, LightningModule, Trainer
-from pytorch_lightning.loggers import CometLogger, Logger
 
 from ascent import setup_root, utils
 
@@ -89,6 +89,10 @@ class AscentTrainer(ABC):
         if logger:
             log.info("Logging hyperparameters!")
             utils.log_hyperparameters(object_dict)
+
+        if cfg.get("compile"):
+            log.info("Compiling model!")
+            model = torch.compile(model)
 
         if cfg.get("train"):
             log.info("Starting training!")
