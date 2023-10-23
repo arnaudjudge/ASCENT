@@ -407,7 +407,8 @@ class nnUNetPatchlessLitModule(LightningModule):
 
         final_preds = final_preds.argmax(0)
 
-        #self.save_mask(final_preds, fname, spacing, save_dir)
+        if self.hparams.save_predictions:
+            self.save_mask(final_preds, fname, spacing, save_dir)
         return final_preds
 
     def configure_optimizers(self) -> dict[Literal["optimizer", "lr_scheduler"], Any]:
