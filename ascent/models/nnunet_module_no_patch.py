@@ -14,7 +14,7 @@ from monai.data import MetaTensor
 from torch import Tensor
 from torch.nn.functional import pad
 
-from ascent.preprocessing.preprocessing import check_anisotropy, get_lowres_axis, resample_image
+from ascent.preprocessing.preprocessing import check_anisotropy, get_lowres_axis, resample_image, resample_label
 from ascent.utils.file_and_folder_operations import save_pickle
 from ascent.utils.inferers import SlidingWindowInferer
 from ascent.utils.softmax import softmax_helper
@@ -249,11 +249,10 @@ class nnUNetPatchlessLitModule(LightningModule):
     def test_step(
         self, batch: dict[str, Tensor], batch_idx: int
     ) -> dict[str, Tensor]:  # noqa: D102
-        img, label = batch["image"], batch["label"]#, batch["image_meta_dict"]
+        img, label, properties_dict = batch["image"], batch["label"], batch["image_meta_dict"]
 
         self.patch_size = list([img.shape[-3], img.shape[-2], self.hparams.sliding_window_len])
         self.inferer.roi_size = self.patch_size
-        self.inferer.sw_batch_size = 1
 
         start_time = time.time()
         preds = self.tta_predict(img) if self.hparams.tta else self.predict(img)
@@ -294,54 +293,26 @@ class nnUNetPatchlessLitModule(LightningModule):
             batch_size=self.trainer.datamodule.hparams.batch_size,
         )
 
-        # properties_dict = self.get_properties(image_meta_dict)
-        #
-        # if self.hparams.save_predictions:
-        #     preds = preds.squeeze(0).cpu().detach().numpy()
-        #     original_shape = properties_dict.get("original_shape")
-        #     if len(preds.shape[1:]) == len(original_shape) - 1:
-        #         preds = preds[..., None]
-        #     if properties_dict.get("resampling_flag"):
-        #         shape_after_cropping = properties_dict.get("shape_after_cropping")
-        #         if check_anisotropy(properties_dict.get("original_spacing")):
-        #             anisotropy_flag = True
-        #             axis = get_lowres_axis(properties_dict.get("original_spacing"))
-        #         elif check_anisotropy(properties_dict.get("spacing_after_resampling")):
-        #             anisotropy_flag = True
-        #             axis = get_lowres_axis(properties_dict.get("spacing_after_resampling"))
-        #         else:
-        #             anisotropy_flag = False
-        #             axis = None
-        #
-        #         if axis is not None:
-        #             if len(axis) == 2:
-        #                 # this happens for spacings like (0.24, 1.25, 1.25) for example. In that case
-        #                 # we do not want to resample separately in the out of plane axis
-        #                 anisotropy_flag = False
-        #
-        #         preds = resample_image(preds, shape_after_cropping, anisotropy_flag, axis, 1, 0)
-        #
-        #     box_start, box_end = properties_dict.get("crop_bbox")
-        #     min_w, min_h, min_d = box_start
-        #     max_w, max_h, max_d = box_end
-        #
-        #     final_preds = np.zeros([preds.shape[0], *original_shape])
-        #     final_preds[:, min_w:max_w, min_h:max_h, min_d:max_d] = preds
-        #
-        #     if self.trainer.datamodule.hparams.test_splits:
-        #         save_dir = os.path.join(self.trainer.default_root_dir, "testing_raw")
-        #     else:
-        #         save_dir = os.path.join(self.trainer.default_root_dir, "validation_raw")
-        #
-        #     fname = properties_dict.get("case_identifier")
-        #     spacing = properties_dict.get("original_spacing")
-        #
-        #     if self.hparams.save_npz:
-        #         self.save_npz_and_properties(final_preds, properties_dict, fname, save_dir)
-        #
-        #     final_preds = final_preds.argmax(0)
-        #
-        self.save_mask(preds.squeeze(0).argmax(0).cpu().detach().numpy(), f'a_{batch_idx}', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
+        if self.hparams.save_predictions:
+            preds = preds.squeeze(0).cpu().detach().numpy()
+            original_shape = properties_dict.get("original_shape").cpu().detach().numpy()[0]
+            if len(preds.shape[1:]) == len(original_shape) - 1:
+                preds = preds[..., None]
+
+            if self.trainer.datamodule.hparams.test_splits:
+                save_dir = os.path.join(self.trainer.default_root_dir, "testing_raw")
+            else:
+                save_dir = os.path.join(self.trainer.default_root_dir, "validation_raw")
+
+            fname = properties_dict.get("case_identifier")[0]
+            spacing = properties_dict.get("original_spacing").cpu().detach().numpy()[0]
+
+            final_preds = np.expand_dims(preds.argmax(0), 0)
+
+            if original_shape != np.asarray(final_preds.shape):
+                final_preds = resample_label(final_preds, original_shape, True, lowres_axis=np.array([2]))
+
+            self.save_mask(final_preds[0, ...], fname, spacing.astype(np.float64), save_dir)
 
         self.test_step_outputs.append({"test/dice": test_dice})
 
@@ -381,7 +352,6 @@ class nnUNetPatchlessLitModule(LightningModule):
 
         self.patch_size = list([img.shape[-3], img.shape[-2], self.hparams.sliding_window_len])
         self.inferer.roi_size = self.patch_size
-        self.inferer.sw_batch_size = 1
 
         start_time = time.time()
         preds = self.tta_predict(img) if self.hparams.tta else self.predict(img)
@@ -693,27 +663,6 @@ class nnUNetPatchlessLitModule(LightningModule):
         itk_image = sitk.GetImageFromArray(rearrange(preds, "w h d ->  d h w"))
         itk_image.SetSpacing(spacing)
         sitk.WriteImage(itk_image, os.path.join(save_dir, fname + ".nii.gz"))
-
-    def save_npz_and_properties(
-        self, preds: np.ndarray, properties_dict: dict, fname: str, save_dir: Union[str, Path]
-    ) -> None:
-        """Save softmax probabilities to the given save directory.
-
-        Args:
-            preds: Predicted softmax.
-            properties_dict: Dictionary containing properties of predicted data (eg. spacing).
-            fname: Filename to save.
-            spacing: Spacing to save the segmentation mask.
-            save_dir: Directory to save the segmentation mask.
-        """
-        print(f"Saving softmax for {fname}...")
-
-        os.makedirs(save_dir, exist_ok=True)
-
-        np.savez_compressed(
-            os.path.join(save_dir, fname + ".npz"), softmax=preds.astype(np.float16)
-        )
-        save_pickle(properties_dict, os.path.join(save_dir, fname + ".pkl"))
 
     def update_eval_criterion_MA(self):
         """Update moving average validation loss."""

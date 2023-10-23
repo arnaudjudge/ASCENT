@@ -51,10 +51,11 @@ class nnUNetDataset(Dataset):
         # self.df = self.df[(self.df['n_frames'] <= 20)]
 
         # split according to test_frac
+        self.test = test
         test_len = int(test_frac * len(self.df))
         train_val_len = len(self.df) - test_len
         idx_train_val, idx_test = random_split(range(len(self.df)), [train_val_len, test_len])
-        if test:
+        if self.test:
             self.df = self.df.iloc[idx_test.indices]
         else:
             self.df = self.df.iloc[idx_train_val.indices]
@@ -66,67 +67,32 @@ class nnUNetDataset(Dataset):
 
     def __getitem__(self, idx):
         sub_path = f"{self.df.iloc[idx]['study']}/{self.df.iloc[idx]['view'].lower()}/{self.df.iloc[idx]['dicom_uuid']}_0000.nii.gz"
-        img = nib.load(self.data_path + '/img/' + sub_path).get_fdata()
+        img_nifti = nib.load(self.data_path + '/img/' + sub_path)
+        img = img_nifti.get_fdata()
         mask = nib.load(self.data_path + '/segmentation/' + sub_path.replace("_0000", "")).get_fdata()
-        original_shape = img.shape
+        original_shape = np.asarray(list(img.shape))
 
         if img.shape[0]*img.shape[1]*img.shape[2] > 10000000:
             time_len = int(10000000 // (img.shape[0]*img.shape[1]))
             img = img[..., :time_len]
             mask = mask[..., :time_len]
 
-        # PADDING
-        # xpad = (((img.shape[0] // 32) + 1) * 32) - img.shape[0]
-        # ypad = (((img.shape[1] // 32) + 1) * 32) - img.shape[1]
-        # zpad = (((img.shape[2] // 4) + 1) * 4) - img.shape[2]
-        #
-        # img = np.pad(img,
-        #              ((xpad // 2, (xpad - xpad // 2)), (ypad // 2, (ypad - ypad // 2)), (zpad // 2, (zpad - zpad // 2))),
-        #              'constant')
-        # mask = np.pad(mask,
-        #               ((xpad // 2, (xpad - xpad // 2)), (ypad // 2, (ypad - ypad // 2)), (zpad // 2, (zpad - zpad // 2))),
-        #               'constant')
-        # img = np.expand_dims(img, 0)
-        # mask = np.expand_dims(mask, 0)
-
         # RESAMPLE
         x = round(img.shape[0] // 32) * 32
         y = round(img.shape[1] // 32) * 32
-        z = round(img.shape[2] // 4) * 4
-
-        # self.save_mask(img, f'a', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
-        # self.save_mask(mask, f'a_m', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
+        if not self.test:
+            z = round(img.shape[2] // 4) * 4
+        else:
+            z = img.shape[2]
 
         img = resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]))
         mask = resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]))
 
-        # self.save_mask(img[0, ...], f'a2', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
-        # self.save_mask(mask[0, ...], f'a2_m', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
-
         return {'image': torch.tensor(img, dtype=torch.float32),
                 'label': torch.tensor(mask, dtype=torch.float32),
-                'original_shape': original_shape}
-
-    def save_mask(
-        self, preds: np.ndarray, fname: str, spacing: np.ndarray, save_dir: Union[str, Path]
-    , sitk=None) -> None:
-        """Save segmentation mask to the given save directory.
-
-        Args:
-            preds: Predicted segmentation mask.
-            fname: Filename to save.
-            spacing: Spacing to save the segmentation mask.
-            save_dir: Directory to save the segmentation mask.
-        """
-        print(f"Saving segmentation for {fname}...")
-
-        os.makedirs(save_dir, exist_ok=True)
-        from einops.einops import rearrange
-        import SimpleITK as sitk
-        preds = preds.astype(np.uint8)
-        itk_image = sitk.GetImageFromArray(rearrange(preds, "w h d ->  d h w"))
-        itk_image.SetSpacing(spacing)
-        sitk.WriteImage(itk_image, os.path.join(save_dir, fname + ".nii.gz"))
+                'image_meta_dict': {'case_identifier': self.df.iloc[idx]['dicom_uuid'],
+                                     'original_shape': original_shape,
+                                     'original_spacing': img_nifti.header['pixdim'][1:4]}}
 
 
 class nnUNetDataModule_no_patch(LightningDataModule):
