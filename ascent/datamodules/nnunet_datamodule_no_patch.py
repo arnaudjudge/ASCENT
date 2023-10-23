@@ -1,0 +1,248 @@
+import os
+from collections import OrderedDict
+from pathlib import Path
+from typing import Optional, Union
+
+import numpy as np
+import torch
+from joblib import Parallel, delayed
+from lightning import LightningDataModule
+from lightning.pytorch.trainer.states import TrainerFn
+from monai.data import CacheDataset, DataLoader, IterableDataset
+from monai.transforms import (
+    Compose,
+    EnsureChannelFirstd,
+    RandAdjustContrastd,
+    RandCropByPosNegLabeld,
+    RandFlipd,
+    RandGaussianNoised,
+    RandGaussianSmoothd,
+    RandRotated,
+    RandScaleIntensityd,
+    RandZoomd,
+    SpatialPadd,
+)
+from sklearn.model_selection import KFold, train_test_split
+
+from ascent import utils
+from ascent.preprocessing.preprocessing import resample_image, resample_label
+from ascent.utils.data_loading import get_case_identifiers_from_npz_folders
+from ascent.utils.dataset import nnUNet_Iterator
+from ascent.utils.file_and_folder_operations import load_pickle, save_pickle, subfiles
+from ascent.utils.transforms import Convert2Dto3Dd, Convert3Dto2Dd, LoadNpyd, MayBeSqueezed
+
+import pandas as pd
+from torch.utils.data import Dataset, random_split
+import json
+import nibabel as nib
+
+log = utils.get_pylogger(__name__)
+
+
+class nnUNetDataset(Dataset):
+    def __init__(self, data_path, test_frac=0.1, seed=0, test=False, *args,
+                 **kwargs):
+        super().__init__()
+        self.data_path = data_path
+        csv_file = self.data_path + '/subset.csv'
+        self.df = pd.read_csv(csv_file, index_col=0)
+        self.df = self.df[self.df['valid_segmentation'] == True]
+
+        # self.df = self.df[(self.df['n_frames'] <= 20)]
+
+        # split according to test_frac
+        test_len = int(test_frac * len(self.df))
+        train_val_len = len(self.df) - test_len
+        idx_train_val, idx_test = random_split(range(len(self.df)), [train_val_len, test_len])
+        if test:
+            self.df = self.df.iloc[idx_test.indices]
+        else:
+            self.df = self.df.iloc[idx_train_val.indices]
+
+        print(f"Test step: {test} , len of dataset {len(self.df)}")
+
+    def __len__(self):
+        return len(self.df.index)
+
+    def __getitem__(self, idx):
+        sub_path = f"{self.df.iloc[idx]['study']}/{self.df.iloc[idx]['view'].lower()}/{self.df.iloc[idx]['dicom_uuid']}_0000.nii.gz"
+        img = nib.load(self.data_path + '/img/' + sub_path).get_fdata()
+        mask = nib.load(self.data_path + '/segmentation/' + sub_path.replace("_0000", "")).get_fdata()
+        original_shape = img.shape
+
+        if img.shape[0]*img.shape[1]*img.shape[2] > 10000000:
+            time_len = int(10000000 // (img.shape[0]*img.shape[1]))
+            img = img[..., :time_len]
+            mask = mask[..., :time_len]
+
+        # PADDING
+        # xpad = (((img.shape[0] // 32) + 1) * 32) - img.shape[0]
+        # ypad = (((img.shape[1] // 32) + 1) * 32) - img.shape[1]
+        # zpad = (((img.shape[2] // 4) + 1) * 4) - img.shape[2]
+        #
+        # img = np.pad(img,
+        #              ((xpad // 2, (xpad - xpad // 2)), (ypad // 2, (ypad - ypad // 2)), (zpad // 2, (zpad - zpad // 2))),
+        #              'constant')
+        # mask = np.pad(mask,
+        #               ((xpad // 2, (xpad - xpad // 2)), (ypad // 2, (ypad - ypad // 2)), (zpad // 2, (zpad - zpad // 2))),
+        #               'constant')
+        # img = np.expand_dims(img, 0)
+        # mask = np.expand_dims(mask, 0)
+
+        # RESAMPLE
+        x = round(img.shape[0] // 32) * 32
+        y = round(img.shape[1] // 32) * 32
+        z = round(img.shape[2] // 4) * 4
+
+        # self.save_mask(img, f'a', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
+        # self.save_mask(mask, f'a_m', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
+
+        img = resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]))
+        mask = resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]))
+
+        # self.save_mask(img[0, ...], f'a2', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
+        # self.save_mask(mask[0, ...], f'a2_m', np.array([0.2891, 0.2891, 1.0000]), './OUTPUT_TEST_NOPATCH/')
+
+        return {'image': torch.tensor(img, dtype=torch.float32),
+                'label': torch.tensor(mask, dtype=torch.float32),
+                'original_shape': original_shape}
+
+    def save_mask(
+        self, preds: np.ndarray, fname: str, spacing: np.ndarray, save_dir: Union[str, Path]
+    , sitk=None) -> None:
+        """Save segmentation mask to the given save directory.
+
+        Args:
+            preds: Predicted segmentation mask.
+            fname: Filename to save.
+            spacing: Spacing to save the segmentation mask.
+            save_dir: Directory to save the segmentation mask.
+        """
+        print(f"Saving segmentation for {fname}...")
+
+        os.makedirs(save_dir, exist_ok=True)
+        from einops.einops import rearrange
+        import SimpleITK as sitk
+        preds = preds.astype(np.uint8)
+        itk_image = sitk.GetImageFromArray(rearrange(preds, "w h d ->  d h w"))
+        itk_image.SetSpacing(spacing)
+        sitk.WriteImage(itk_image, os.path.join(save_dir, fname + ".nii.gz"))
+
+
+class nnUNetDataModule_no_patch(LightningDataModule):
+    """Data module for nnUnet pipeline."""
+
+    def __init__(
+        self,
+        data_dir: str = "data/",
+        dataset_name: str = "CAMUS",
+        fold: int = 0,
+        batch_size: int = 2,
+        patch_size: tuple[int, ...] = (128, 128, 128),
+        in_channels: int = 1,
+        do_dummy_2D_data_aug: bool = True,
+        num_workers: int = os.cpu_count() - 1,
+        pin_memory: bool = True,
+        test_splits: bool = True,
+        seg_label: bool = True,
+    ):
+        """Initialize class instance.
+
+        Args:
+            data_dir: Path to the data directory.
+            dataset_name: Name of dataset to be used.
+            fold: Fold to be used for training, validation or test.
+            batch_size: Batch size to be used for training and validation.
+            patch_size: Patch size to crop the data..
+            in_channels: Number of input channels.
+            do_dummy_2D_data_aug: Whether to apply 2D transformation on 3D dataset.
+            num_workers: Number of subprocesses to use for data loading.
+            pin_memory: Whether to pin memory to GPU.
+            test_splits: Whether to split data into train/val/test (0.8/0.1/0.1).
+            seg_label: Whether the labels are segmentations.
+
+        Raises:
+            NotImplementedError: If the patch shape is not 2D nor 3D.
+        """
+        super().__init__()
+        # this line allows to access init params with 'self.hparams' attribute
+        # also ensures init params will be stored in ckpt
+        self.save_hyperparameters(logger=False)
+
+        self.data_train: Optional[torch.utils.Dataset] = None
+        self.data_val: Optional[torch.utils.Dataset] = None
+        self.data_test: Optional[torch.utils.Dataset] = None
+
+    def prepare_data(self):
+        """
+        Empty prepare_data method left in intentionally.
+        https://pytorch-lightning.readthedocs.io/en/latest/data/datamodule.html#prepare-data
+        """
+        pass
+
+    def prepare_data_per_node(self):
+        pass
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        """Load data.
+
+        More detailed steps:
+        1. Split the dataset into train, validation (and test) folds if it was not done.
+        2. Use the specified fold for training. Create random 80:10:10 or 80:20 split if requested
+           fold is larger than the length of saved splits.
+        3. Set variables: `self.data_train`, `self.data_val`, `self.data_test`, `self.data_predict`.
+
+        This method is called by lightning with both `trainer.fit()` and `trainer.test()`, so be
+        careful not to execute things like random split twice!
+        """
+        if stage == "fit" or stage is None:
+            train_set_full = nnUNetDataset(self.hparams.data_dir + self.hparams.dataset_name)
+            train_set_size = int(len(train_set_full) * 0.9)
+            valid_set_size = len(train_set_full) - train_set_size
+            self.data_train, self.data_val = random_split(train_set_full, [train_set_size, valid_set_size])
+
+        # Assign test dataset for use in dataloader(s)
+        if stage == "test" or stage is None:
+            self.data_test = nnUNetDataset(self.hparams.data_dir + self.hparams.dataset_name, test=True)
+
+    def train_dataloader(self) -> DataLoader:  # noqa: D102
+        return DataLoader(
+            dataset=self.data_train,
+            batch_size=self.hparams.batch_size,
+            num_workers=max(self.hparams.num_workers, 1),
+            pin_memory=self.hparams.pin_memory,
+            shuffle=False,
+            persistent_workers=True,
+        )
+
+    def val_dataloader(self) -> DataLoader:  # noqa: D102
+        return DataLoader(
+            dataset=self.data_val,
+            batch_size=self.hparams.batch_size,
+            num_workers=max(self.hparams.num_workers, 1),
+            pin_memory=self.hparams.pin_memory,
+            shuffle=False,
+            persistent_workers=True,
+        )
+
+    def test_dataloader(self) -> DataLoader:  # noqa: D102
+        # We use a batch size of 1 for testing as the images have different shapes and we can't
+        # stack them
+
+        return DataLoader(
+            dataset=self.data_test,
+            batch_size=1,
+            num_workers=self.hparams.num_workers,
+            pin_memory=self.hparams.pin_memory,
+            shuffle=False,
+        )
+
+
+if __name__ == "__main__":
+    dl = nnUNetDataModule_no_patch('/data/ascent_data/subset_3/', dataset_name='', num_workers=1, batch_size=1)
+
+    dl.setup()
+    for i in range(1):
+        batch = next(iter(dl.train_dataloader()))
+        print(batch['image'].shape)
+        print(batch['label'].shape)

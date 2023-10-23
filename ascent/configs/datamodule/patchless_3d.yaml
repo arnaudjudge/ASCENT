@@ -1,0 +1,7 @@
+defaults:
+  - nnunet_no_patch
+
+batch_size: 1
+dataset_name: subset_3
+do_dummy_2D_data_aug: True
+num_workers: 12
