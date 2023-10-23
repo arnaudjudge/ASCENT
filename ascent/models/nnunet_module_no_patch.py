@@ -350,6 +350,12 @@ class nnUNetPatchlessLitModule(LightningModule):
     def predict_step(self, batch: dict[str, Tensor], batch_idx: int):  # noqa: D102
         img, image_meta_dict = batch["image"], batch["image_meta_dict"]
 
+        img_numpy = img.cpu().detach().numpy()[0, 0, ...]
+        x = round(img_numpy.shape[0] // 32) * 32
+        y = round(img_numpy.shape[1] // 32) * 32
+        z = img_numpy.shape[2]
+        img = torch.tensor(np.expand_dims(resample_image(np.expand_dims(img_numpy, 0), (x, y, z), True, lowres_axis=np.array([2])), 0)).type_as(img)
+
         self.patch_size = list([img.shape[-3], img.shape[-2], self.hparams.sliding_window_len])
         self.inferer.roi_size = self.patch_size
 
