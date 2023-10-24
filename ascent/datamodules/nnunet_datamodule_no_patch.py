@@ -162,14 +162,14 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         careful not to execute things like random split twice!
         """
         if stage == "fit" or stage is None:
-            train_set_full = nnUNetDataset(self.hparams.data_dir + self.hparams.dataset_name)
+            train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name)
             train_set_size = int(len(train_set_full) * 0.9)
             valid_set_size = len(train_set_full) - train_set_size
             self.data_train, self.data_val = random_split(train_set_full, [train_set_size, valid_set_size])
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test" or stage is None:
-            self.data_test = nnUNetDataset(self.hparams.data_dir + self.hparams.dataset_name, test=True)
+            self.data_test = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name, test=True)
 
     def train_dataloader(self) -> DataLoader:  # noqa: D102
         return DataLoader(
