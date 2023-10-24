@@ -78,6 +78,7 @@ def resample_image(
     lowres_axis: Optional[np.ndarray] = None,
     interp_order: int = 3,
     order_z: int = 0,
+    verbose: bool = True,
 ) -> np.ndarray:
     """Resample an image.
 
@@ -88,6 +89,7 @@ def resample_image(
         lowres_axis: Axis of lowest resolution.
         interp_order: Interpolation order of skimage.transform.resize.
         order_z: Interpolation order for the lowest resolution axis in case of anisotropic image.
+        verbose: Whether to print details about resampling
 
     Returns:
         Resampled image.
@@ -98,7 +100,8 @@ def resample_image(
         image = image.astype(float)
         resized_channels = []
         if anisotropy_flag:
-            print("Anisotropic image, using separate z resampling")
+            if verbose:
+                print("Anisotropic image, using separate z resampling")
             axis = lowres_axis[0]
             if axis == 0:
                 new_shape_2d = new_shape[1:]
@@ -138,7 +141,8 @@ def resample_image(
                     )
                 resized_channels.append(resized.astype(dtype_data))
         else:
-            print("Not using separate z resampling")
+            if verbose:
+                print("Not using separate z resampling")
             for image_c in image:
                 resized = resize(
                     image_c,
@@ -153,7 +157,8 @@ def resample_image(
         reshaped = np.stack(resized_channels, axis=0)
         return reshaped.astype(dtype_data)
     else:
-        print("No resampling necessary")
+        if verbose:
+            print("No resampling necessary")
         return image
 
 
@@ -164,6 +169,7 @@ def resample_label(
     lowres_axis: Optional[np.ndarray] = None,
     interp_order: int = 1,
     order_z: int = 0,
+    verbose: bool = True,
 ) -> np.ndarray:
     """Resample a label.
 
@@ -174,6 +180,7 @@ def resample_label(
         lowres_axis: Axis of lowest resolution.
         interp_order: Interpolation order of skimage.transform.resize.
         order_z: Interpolation order for the lowest resolution axis in case of anisotropic label.
+        verbose: Whether to print details about resampling
 
     Returns:
         Resampled label.
@@ -183,7 +190,8 @@ def resample_label(
         reshaped = np.zeros(new_shape, dtype=np.uint8)
         n_class = np.max(label)
         if anisotropy_flag:
-            print("Anisotropic label, using separate z resampling")
+            if verbose:
+                print("Anisotropic label, using separate z resampling")
             axis = lowres_axis[0]
             depth = shape[axis]
             if axis == 0:
@@ -236,7 +244,8 @@ def resample_label(
             else:
                 reshaped = reshaped_2d.astype(np.uint8)
         else:
-            print("Not using separate z resampling")
+            if verbose:
+                print("Not using separate z resampling")
             for class_ in range(1, int(n_class) + 1):
                 mask = label[0] == class_
                 resized = resize(
@@ -253,7 +262,8 @@ def resample_label(
         reshaped = np.expand_dims(reshaped, 0)
         return reshaped
     else:
-        print("No resampling necessary")
+        if verbose:
+            print("No resampling necessary")
         return label
 
 

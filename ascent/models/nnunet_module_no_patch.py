@@ -310,7 +310,7 @@ class nnUNetPatchlessLitModule(LightningModule):
             final_preds = np.expand_dims(preds.argmax(0), 0)
 
             if original_shape != np.asarray(final_preds.shape):
-                final_preds = resample_label(final_preds, original_shape, True, lowres_axis=np.array([2]))
+                final_preds = resample_label(final_preds, original_shape, True, lowres_axis=np.array([2]), verbose=False)
 
             self.save_mask(final_preds[0, ...], fname, spacing.astype(np.float64), save_dir)
 
@@ -354,7 +354,7 @@ class nnUNetPatchlessLitModule(LightningModule):
         x = round(img_numpy.shape[0] // 32) * 32
         y = round(img_numpy.shape[1] // 32) * 32
         z = img_numpy.shape[2]
-        img = torch.tensor(np.expand_dims(resample_image(np.expand_dims(img_numpy, 0), (x, y, z), True, lowres_axis=np.array([2])), 0)).type_as(img)
+        img = torch.tensor(np.expand_dims(resample_image(np.expand_dims(img_numpy, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False), 0)).type_as(img)
 
         self.patch_size = list([img.shape[-3], img.shape[-2], self.hparams.sliding_window_len])
         self.inferer.roi_size = self.patch_size

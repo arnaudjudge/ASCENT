@@ -85,8 +85,8 @@ class nnUNetDataset(Dataset):
         else:
             z = img.shape[2]
 
-        img = resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]))
-        mask = resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]))
+        img = resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False)
+        mask = resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False)
 
         return {'image': torch.tensor(img, dtype=torch.float32),
                 'label': torch.tensor(mask, dtype=torch.float32),
