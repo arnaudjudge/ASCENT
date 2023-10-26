@@ -13,6 +13,7 @@ from lightning import LightningModule
 from monai.data import MetaTensor
 from torch import Tensor
 from torch.nn.functional import pad
+from torchvision.transforms.functional import adjust_contrast
 
 from ascent.preprocessing.preprocessing import check_anisotropy, get_lowres_axis, resample_image, resample_label
 from ascent.utils.file_and_folder_operations import save_pickle
@@ -102,10 +103,6 @@ class nnUNetPatchlessLitModule(LightningModule):
         self.example_input_array = torch.rand(
             1, self.net.in_channels, *self.patch_size, device=self.device
         )
-
-        # get the flipping axes in case of tta
-        if self.hparams.tta:
-            self.tta_flips = self.get_tta_flips()
 
     def forward(self, img: Union[Tensor, MetaTensor]) -> Union[Tensor, MetaTensor]:  # noqa: D102
         return self.net(img)
@@ -485,17 +482,10 @@ class nnUNetPatchlessLitModule(LightningModule):
                 pred = self.predict_3D_3Dconv_tiled(image, apply_softmax)
                 # Inverse the padding after prediction
                 return pred[..., 6:-6]
-            elif len(self.patch_size) == 2:
-                return self.predict_3D_2Dconv_tiled(image, apply_softmax)
             else:
-                raise NotImplementedError
+                raise ValueError("Check your patch size. You dummy.")
         if len(image.shape) == 4:
-            if len(self.patch_size) == 2:
-                return self.predict_2D_2Dconv_tiled(image, apply_softmax)
-            elif len(self.patch_size) == 3:
-                raise ValueError("You can't predict a 2D image with 3D model. You dummy.")
-            else:
-                raise NotImplementedError
+            raise ValueError("No 2D images here. You dummy.")
 
     def tta_predict(
         self, image: Union[Tensor, MetaTensor], apply_softmax: bool = True
@@ -510,33 +500,29 @@ class nnUNetPatchlessLitModule(LightningModule):
             Aggregated prediction over number of flips.
         """
         preds = self.predict(image, apply_softmax)
-        for flip_idx in self.tta_flips:
-            preds += torch.flip(self.predict(torch.flip(image, flip_idx), apply_softmax), flip_idx)
-        preds /= len(self.tta_flips) + 1
+        factors = [1.1, 0.9, 1.25, 0.75]
+        translations = [40, 60, 80, 120]
+
+        for factor in factors:
+            preds += self.predict(adjust_contrast(image.permute((4, 0, 1, 2, 3)), factor).permute((1, 2, 3, 4, 0)), apply_softmax)
+
+        def x_translate_left(img, amount=20):
+            return pad(img, (0, 0, 0, 0, amount, 0), mode="constant")[:, :, :-amount, :, :]
+        def x_translate_right(img, amount=20):
+            return pad(img, (0, 0, 0, 0, 0, amount), mode="constant")[:, :, amount:, :, :]
+        def y_translate_up(img, amount=20):
+            return pad(img, (0, 0, amount, 0, 0, 0), mode="constant")[:, :, :, :-amount, :]
+        def y_translate_down(img, amount=20):
+            return pad(img, (0, 0, 0, amount, 0, 0), mode="constant")[:, :, :, amount:, :]
+
+        for translation in translations:
+            preds += x_translate_right(self.predict(x_translate_left(image, translation), apply_softmax), translation)
+            preds += x_translate_left(self.predict(x_translate_right(image, translation), apply_softmax), translation)
+            preds += y_translate_down(self.predict(y_translate_up(image, translation), apply_softmax), translation)
+            preds += y_translate_up(self.predict(y_translate_down(image, translation), apply_softmax), translation)
+
+        preds /= len(factors) + len(translations) * 4 + 1
         return preds
-
-    def predict_2D_2Dconv_tiled(
-        self, image: Union[Tensor, MetaTensor], apply_softmax: bool = True
-    ) -> Union[Tensor, MetaTensor]:
-        """Predict 2D image with 2D model.
-
-        Args:
-            image: Image to predict.
-            apply_softmax: Whether to apply softmax to prediction.
-
-        Returns:
-            Aggregated prediction over all sliding windows.
-
-        Raises:
-            ValueError: If image is not 2D.
-        """
-        if not len(image.shape) == 4:
-            raise ValueError("image must be (b, c, w, h)")
-
-        if apply_softmax:
-            return softmax_helper(self.sliding_window_inference(image))
-        else:
-            return self.sliding_window_inference(image)
 
     def predict_3D_3Dconv_tiled(
         self, image: Union[Tensor, MetaTensor], apply_softmax: bool = True
@@ -560,40 +546,6 @@ class nnUNetPatchlessLitModule(LightningModule):
             return softmax_helper(self.sliding_window_inference(image))
         else:
             return self.sliding_window_inference(image)
-
-    def predict_3D_2Dconv_tiled(
-        self, image: Union[Tensor, MetaTensor], apply_softmax: bool = True
-    ) -> Union[Tensor, MetaTensor]:
-        """Predict 3D image with 2D model.
-
-        Args:
-            image: Image to predict.
-            apply_softmax: Whether to apply softmax to prediction.
-
-        Returns:
-            Aggregated prediction over all sliding windows.
-
-        Raises:
-            ValueError: If image is not 3D.
-        """
-        if not len(image.shape) == 5:
-            raise ValueError("image must be (b, c, w, h, d)")
-        preds_shape = (image.shape[0], self.num_classes, *image.shape[2:])
-        preds = torch.zeros(preds_shape, dtype=image.dtype, device=image.device)
-        for depth in range(image.shape[-1]):
-            preds[..., depth] = self.predict_2D_2Dconv_tiled(image[..., depth], apply_softmax)
-        return preds
-
-    def get_tta_flips(self) -> list[list[int]]:
-        """Get the all possible flips for test time augmentation.
-
-        Returns:
-            List of axes to flip an 2D or 3D image.
-        """
-        if self.threeD:
-            return [[2], [3], [4], [2, 3], [2, 4], [3, 4], [2, 3, 4]]
-        else:
-            return [[2], [3], [2, 3]]
 
     def sliding_window_inference(
         self, image: Union[Tensor, MetaTensor]
