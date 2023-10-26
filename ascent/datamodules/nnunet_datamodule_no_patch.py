@@ -74,8 +74,9 @@ class nnUNetDataset(Dataset):
 
         if img.shape[0]*img.shape[1]*img.shape[2] > 10000000:
             time_len = int(10000000 // (img.shape[0]*img.shape[1]))
-            img = img[..., :time_len]
-            mask = mask[..., :time_len]
+            start_idx = np.random.randint(low=0, high=img.shape[2]-time_len)
+            img = img[..., start_idx:start_idx+time_len]
+            mask = mask[..., start_idx:start_idx+time_len]
 
         # RESAMPLE
         x = round(img.shape[0] // 32) * 32
