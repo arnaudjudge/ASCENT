@@ -68,7 +68,7 @@ class nnUNetDataset(Dataset):
     def __getitem__(self, idx):
         sub_path = f"{self.df.iloc[idx]['study']}/{self.df.iloc[idx]['view'].lower()}/{self.df.iloc[idx]['dicom_uuid']}_0000.nii.gz"
         img_nifti = nib.load(self.data_path + '/img/' + sub_path)
-        img = img_nifti.get_fdata()
+        img = img_nifti.get_fdata() / 255
         mask = nib.load(self.data_path + '/segmentation/' + sub_path.replace("_0000", "")).get_fdata()
         original_shape = np.asarray(list(img.shape))
 
