@@ -115,6 +115,10 @@ class AscentTrainer(ABC):
 
         if cfg.get("test"):
             log.info("Starting testing!")
+            trainer_conf = cfg.trainer
+            trainer_conf['accelerator'] = 'auto'
+            trainer_conf['devices'] = 1
+            trainer: Trainer = hydra.utils.instantiate(trainer_conf, callbacks=callbacks, logger=logger)
             if cfg.get("best_model"):
                 ckpt_path = trainer.checkpoint_callback.best_model_path
                 if ckpt_path == "":
@@ -145,4 +149,6 @@ def main():
 
 
 if __name__ == "__main__":
+    import os
+    os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
     main()
