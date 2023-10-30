@@ -58,9 +58,40 @@ class nnUNetDataset(Dataset):
         train_val_len = len(self.df) - test_len
         idx_train_val, idx_test = random_split(range(len(self.df)), [train_val_len, test_len])
         if self.test:
-            self.df = self.df.iloc[idx_test.indices]
+            #self.df = self.df.iloc[idx_test.indices]
+            self.df = self.df[self.df['dicom_uuid'].isin(['di-049A-A1B8-5410', 'di-07F0-17AE-9F04', 'di-0E79-9C3B-6B19',
+                                                         'di-1134-3C8D-029B', 'di-18F1-513A-EDA5', 'di-1A71-4609-FF23',
+                                                         'di-27AC-18B7-9FA3', 'di-2FA3-9BFB-17A3', 'di-36B0-4504-F31A',
+                                                         'di-42EC-F2BA-C99E', 'di-4948-0A71-457C', 'di-4AB0-241E-442C',
+                                                         'di-4DBD-1602-DD41', 'di-51A6-086D-9429', 'di-5619-EC74-BF59',
+                                                         'di-6BC1-A03E-3B92', 'di-7824-6815-E07D', 'di-85A5-E58E-6C4E',
+                                                         'di-9304-FEEA-BABD', 'di-986D-384A-3BEE', 'di-9E57-DBB2-4313',
+                                                         'di-A466-BFB9-2C6F', 'di-AC12-5B26-67C7', 'di-B6BA-69E4-ABAA',
+                                                         'di-BA44-0395-AF7A', 'di-BF97-9E80-C01B', 'di-C155-AA91-6271',
+                                                         'di-C1D9-A49B-6DEC', 'di-C374-C451-4A49', 'di-C425-2069-8EF8',
+                                                         'di-C882-9002-816C', 'di-CCA1-E7EE-7288', 'di-DC43-4169-20E1',
+                                                         'di-E572-2EC8-E9C1', 'di-E5B2-B48C-F045', 'di-E74A-291D-150A',
+                                                         'di-E8E1-1DE6-D3C5', 'di-EBAE-B9BC-F90B', 'di-EDC8-A514-F22A',
+                                                         'di-EEB9-0133-4633', 'di-F2FF-397C-F62E', 'di-F33B-7A20-0BDF',
+                                                         'di-F967-7E77-AF69'])]
+            print(self.df['dicom_uuid'])
         else:
             self.df = self.df.iloc[idx_train_val.indices]
+            self.df = self.df[~self.df['dicom_uuid'].isin(['di-049A-A1B8-5410', 'di-07F0-17AE-9F04', 'di-0E79-9C3B-6B19',
+                                                           'di-1134-3C8D-029B', 'di-18F1-513A-EDA5', 'di-1A71-4609-FF23',
+                                                           'di-27AC-18B7-9FA3', 'di-2FA3-9BFB-17A3', 'di-36B0-4504-F31A',
+                                                           'di-42EC-F2BA-C99E', 'di-4948-0A71-457C', 'di-4AB0-241E-442C',
+                                                           'di-4DBD-1602-DD41', 'di-51A6-086D-9429', 'di-5619-EC74-BF59',
+                                                           'di-6BC1-A03E-3B92', 'di-7824-6815-E07D', 'di-85A5-E58E-6C4E',
+                                                           'di-9304-FEEA-BABD', 'di-986D-384A-3BEE', 'di-9E57-DBB2-4313',
+                                                           'di-A466-BFB9-2C6F', 'di-AC12-5B26-67C7', 'di-B6BA-69E4-ABAA',
+                                                           'di-BA44-0395-AF7A', 'di-BF97-9E80-C01B', 'di-C155-AA91-6271',
+                                                           'di-C1D9-A49B-6DEC', 'di-C374-C451-4A49', 'di-C425-2069-8EF8',
+                                                           'di-C882-9002-816C', 'di-CCA1-E7EE-7288', 'di-DC43-4169-20E1',
+                                                           'di-E572-2EC8-E9C1', 'di-E5B2-B48C-F045', 'di-E74A-291D-150A',
+                                                           'di-E8E1-1DE6-D3C5', 'di-EBAE-B9BC-F90B', 'di-EDC8-A514-F22A',
+                                                           'di-EEB9-0133-4633', 'di-F2FF-397C-F62E', 'di-F33B-7A20-0BDF',
+                                                           'di-F967-7E77-AF69'])]
 
         print(f"Test step: {test} , len of dataset {len(self.df)}")
 
