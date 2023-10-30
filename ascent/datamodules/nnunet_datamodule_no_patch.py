@@ -35,12 +35,14 @@ import pandas as pd
 from torch.utils.data import Dataset, random_split
 import json
 import nibabel as nib
+import torchio as tio
+from random import shuffle
 
 log = utils.get_pylogger(__name__)
 
 
 class nnUNetDataset(Dataset):
-    def __init__(self, data_path, test_frac=0.1, seed=0, test=False, *args,
+    def __init__(self, data_path, test_frac=0.1, common_spacing=None, seed=0, test=False, *args,
                  **kwargs):
         super().__init__()
         self.data_path = data_path
@@ -48,7 +50,7 @@ class nnUNetDataset(Dataset):
         self.df = pd.read_csv(csv_file, index_col=0)
         self.df = self.df[self.df['valid_segmentation'] == True]
 
-        # self.df = self.df[(self.df['n_frames'] <= 20)]
+        self.common_spacing = common_spacing
 
         # split according to test_frac
         self.test = test
@@ -62,11 +64,14 @@ class nnUNetDataset(Dataset):
 
         print(f"Test step: {test} , len of dataset {len(self.df)}")
 
+        if common_spacing is None:
+            self.calculate_common_spacing()
+
     def __len__(self):
         return len(self.df.index)
 
     def __getitem__(self, idx):
-        sub_path = f"{self.df.iloc[idx]['study']}/{self.df.iloc[idx]['view'].lower()}/{self.df.iloc[idx]['dicom_uuid']}_0000.nii.gz"
+        sub_path = self.get_img_subpath(self.df.iloc[idx])
         img_nifti = nib.load(self.data_path + '/img/' + sub_path)
         img = img_nifti.get_fdata() / 255
         mask = nib.load(self.data_path + '/segmentation/' + sub_path.replace("_0000", "")).get_fdata()
@@ -78,7 +83,7 @@ class nnUNetDataset(Dataset):
             img = img[..., start_idx:start_idx+time_len]
             mask = mask[..., start_idx:start_idx+time_len]
 
-        # RESAMPLE
+        # get desired closest divisible shape
         x = round(img.shape[0] // 32) * 32
         y = round(img.shape[1] // 32) * 32
         if not self.test:
@@ -86,14 +91,36 @@ class nnUNetDataset(Dataset):
         else:
             z = img.shape[2]
 
-        img = resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False)
-        mask = resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False)
+        if self.common_spacing is not None:
+            transform = tio.Resample(self.common_spacing)
+            croporpad = tio.CropOrPad((x, y, z))
+            img = croporpad(transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))).tensor
+            mask = croporpad(transform(tio.LabelMap(tensor=np.expand_dims(mask, 0), affine=img_nifti.affine))).tensor
+        else:
+            # RESAMPLE NAIVE
+            img = torch.tensor(resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False))
+            mask = torch.tensor(resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False))
 
-        return {'image': torch.tensor(img, dtype=torch.float32),
-                'label': torch.tensor(mask, dtype=torch.float32),
+        return {'image': img.type(torch.float32),
+                'label': mask.type(torch.float32),
                 'image_meta_dict': {'case_identifier': self.df.iloc[idx]['dicom_uuid'],
                                      'original_shape': original_shape,
                                      'original_spacing': img_nifti.header['pixdim'][1:4]}}
+
+    def get_img_subpath(self, row):
+        return f"{row['study']}/{row['view'].lower()}/{row['dicom_uuid']}_0000.nii.gz"
+
+    def calculate_common_spacing(self, num_samples=100):
+        spacings = np.zeros(3)
+        idx = self.df.reset_index().index.to_list()
+        shuffle(idx)
+        idx = idx[:num_samples]
+        for i in idx:
+            sub_path = self.get_img_subpath(self.df.iloc[i])
+            img_nifti = nib.load(self.data_path + '/img/' + sub_path)
+            spacings += img_nifti.header['pixdim'][1:4]
+        self.common_spacing = spacings / len(idx)
+        print(f"ESTIMATED COMMON AVERAGE SPACING: {self.common_spacing}")
 
 
 class nnUNetDataModule_no_patch(LightningDataModule):
@@ -106,6 +133,7 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         fold: int = 0,
         batch_size: int = 2,
         patch_size: tuple[int, ...] = (128, 128, 128),
+        common_spacing: tuple[float, ...] = None,
         in_channels: int = 1,
         do_dummy_2D_data_aug: bool = True,
         num_workers: int = os.cpu_count() - 1,
@@ -163,14 +191,14 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         careful not to execute things like random split twice!
         """
         if stage == "fit" or stage is None:
-            train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name)
+            train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name, common_spacing=self.hparams.common_spacing)
             train_set_size = int(len(train_set_full) * 0.9)
             valid_set_size = len(train_set_full) - train_set_size
             self.data_train, self.data_val = random_split(train_set_full, [train_set_size, valid_set_size])
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test" or stage is None:
-            self.data_test = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name, test=True)
+            self.data_test = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name, test=True, common_spacing=self.hparams.common_spacing)
 
     def train_dataloader(self) -> DataLoader:  # noqa: D102
         return DataLoader(
@@ -206,10 +234,16 @@ class nnUNetDataModule_no_patch(LightningDataModule):
 
 
 if __name__ == "__main__":
-    dl = nnUNetDataModule_no_patch('/data/ascent_data/subset_3/', dataset_name='', num_workers=1, batch_size=1)
+    dl = nnUNetDataModule_no_patch('/data/ascent_data/subset_3/', common_spacing=(0.4302, 0.4302, 1.0), dataset_name='', num_workers=1, batch_size=1)
 
     dl.setup()
-    for i in range(1):
-        batch = next(iter(dl.train_dataloader()))
+    for batch in iter(dl.train_dataloader()):
         print(batch['image'].shape)
         print(batch['label'].shape)
+
+        from matplotlib import pyplot as plt
+        plt.imshow(batch['image'][0, 0, :, :, 5])
+
+        plt.figure()
+        plt.imshow(batch['label'][0, 0, :, :, 5])
+        plt.show()
