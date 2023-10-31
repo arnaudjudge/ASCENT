@@ -50,8 +50,6 @@ class nnUNetDataset(Dataset):
         self.df = pd.read_csv(csv_file, index_col=0)
         self.df = self.df[self.df['valid_segmentation'] == True]
 
-        self.common_spacing = common_spacing
-
         # split according to test_frac
         self.test = test
         test_len = int(test_frac * len(self.df))
@@ -97,6 +95,9 @@ class nnUNetDataset(Dataset):
 
         if common_spacing is None:
             self.calculate_common_spacing()
+        else:
+            self.common_spacing = np.asarray(common_spacing)
+            print(f"USING PRESET COMMON SPACING: {self.common_spacing}")
 
     def __len__(self):
         return len(self.df.index)
