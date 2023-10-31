@@ -13,7 +13,7 @@ from lightning import LightningModule
 from monai.data import MetaTensor
 from torch import Tensor
 from torch.nn.functional import pad
-from torchvision.transforms.functional import adjust_contrast
+from torchvision.transforms.functional import adjust_contrast, rotate
 
 from ascent.preprocessing.preprocessing import check_anisotropy, get_lowres_axis, resample_image, resample_label
 from ascent.utils.file_and_folder_operations import save_pickle
@@ -502,6 +502,7 @@ class nnUNetPatchlessLitModule(LightningModule):
         preds = self.predict(image, apply_softmax)
         factors = [1.1, 0.9, 1.25, 0.75]
         translations = [40, 60, 80, 120]
+        rotations = [5, 10, -5, -10]
 
         for factor in factors:
             preds += self.predict(adjust_contrast(image.permute((4, 0, 1, 2, 3)), factor).permute((1, 2, 3, 4, 0)), apply_softmax)
@@ -521,7 +522,17 @@ class nnUNetPatchlessLitModule(LightningModule):
             preds += y_translate_down(self.predict(y_translate_up(image, translation), apply_softmax), translation)
             preds += y_translate_up(self.predict(y_translate_down(image, translation), apply_softmax), translation)
 
-        preds /= len(factors) + len(translations) * 4 + 1
+        # TODO: optimize this for compute time
+        for rotation in rotations:
+            rotated = torch.zeros_like(image)
+            for i in range(image.shape[-1]):
+                rotated[0, :, :, :, i] = rotate(image[0, :, :, :, i], angle=rotation)
+            rot_pred = self.predict(rotated, apply_softmax)
+            for i in range(image.shape[-1]):
+                rot_pred[0, :, :, :, i] = rotate(rot_pred[0, :, :, :, i], angle=-rotation)
+            preds += rot_pred
+
+        preds /= len(factors) + len(translations) * 4 + len(rotations) + 1
         return preds
 
     def predict_3D_3Dconv_tiled(
