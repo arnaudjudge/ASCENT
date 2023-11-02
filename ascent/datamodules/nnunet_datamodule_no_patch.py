@@ -122,7 +122,7 @@ class nnUNetDataset(Dataset):
         else:
             z = img.shape[2]
 
-        if self.common_spacing is not None:
+        if False: #self.common_spacing is not None:
             transform = tio.Resample(self.common_spacing)
             croporpad = tio.CropOrPad((x, y, z))
             img = croporpad(transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))).tensor
@@ -132,6 +132,7 @@ class nnUNetDataset(Dataset):
             # RESAMPLE NAIVE
             img = torch.tensor(resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False))
             mask = torch.tensor(resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False))
+            print(f"NEW SHAPE {(x, y, z)}")
 
         return {'image': img.type(torch.float32),
                 'label': mask.type(torch.float32),
