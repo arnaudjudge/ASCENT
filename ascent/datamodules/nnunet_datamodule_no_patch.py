@@ -109,16 +109,15 @@ class nnUNetDataset(Dataset):
         mask = nib.load(self.data_path + '/segmentation/' + sub_path.replace("_0000", "")).get_fdata()
         original_shape = np.asarray(list(img.shape))
 
-        if img.shape[0]*img.shape[1]*img.shape[2] > 10000000:
-            time_len = int(10000000 // (img.shape[0]*img.shape[1]))
-            start_idx = np.random.randint(low=0, high=img.shape[2]-time_len)
-            img = img[..., start_idx:start_idx+time_len]
-            mask = mask[..., start_idx:start_idx+time_len]
-
         # get desired closest divisible shape
         x = round(img.shape[0] // 32) * 32
         y = round(img.shape[1] // 32) * 32
         if not self.test:
+            if img.shape[0] * img.shape[1] * img.shape[2] > 10000000:
+                time_len = int(10000000 // (img.shape[0] * img.shape[1]))
+                start_idx = np.random.randint(low=0, high=img.shape[2] - time_len)
+                img = img[..., start_idx:start_idx + time_len]
+                mask = mask[..., start_idx:start_idx + time_len]
             z = round(img.shape[2] // 4) * 4
         else:
             z = img.shape[2]
@@ -128,6 +127,7 @@ class nnUNetDataset(Dataset):
             croporpad = tio.CropOrPad((x, y, z))
             img = croporpad(transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))).tensor
             mask = croporpad(transform(tio.LabelMap(tensor=np.expand_dims(mask, 0), affine=img_nifti.affine))).tensor
+            print(f"NEW SHAPE {(x,y,z)}")
         else:
             # RESAMPLE NAIVE
             img = torch.tensor(resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False))
@@ -137,7 +137,8 @@ class nnUNetDataset(Dataset):
                 'label': mask.type(torch.float32),
                 'image_meta_dict': {'case_identifier': self.df.iloc[idx]['dicom_uuid'],
                                      'original_shape': original_shape,
-                                     'original_spacing': img_nifti.header['pixdim'][1:4]}}
+                                     'original_spacing': img_nifti.header['pixdim'][1:4],
+                                     'original_affine': img_nifti.affine}}
 
     def get_img_subpath(self, row):
         return f"{row['study']}/{row['view'].lower()}/{row['dicom_uuid']}_0000.nii.gz"
@@ -147,10 +148,12 @@ class nnUNetDataset(Dataset):
         idx = self.df.reset_index().index.to_list()
         shuffle(idx)
         idx = idx[:num_samples]
+
         for i in idx:
             sub_path = self.get_img_subpath(self.df.iloc[i])
             img_nifti = nib.load(self.data_path + '/img/' + sub_path)
             spacings += img_nifti.header['pixdim'][1:4]
+
         self.common_spacing = spacings / len(idx)
         print(f"ESTIMATED COMMON AVERAGE SPACING: {self.common_spacing}")
 

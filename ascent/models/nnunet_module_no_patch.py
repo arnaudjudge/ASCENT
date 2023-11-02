@@ -20,7 +20,7 @@ from ascent.utils.file_and_folder_operations import save_pickle
 from ascent.utils.inferers import SlidingWindowInferer
 from ascent.utils.softmax import softmax_helper
 from ascent.utils.tensor_utils import sum_tensor
-
+import torchio as tio
 
 class nnUNetPatchlessLitModule(LightningModule):
     """`nnUNet` training, evaluation and test strategy converted to PyTorch Lightning.
@@ -303,13 +303,17 @@ class nnUNetPatchlessLitModule(LightningModule):
 
             fname = properties_dict.get("case_identifier")[0]
             spacing = properties_dict.get("original_spacing").cpu().detach().numpy()[0]
+            affine = properties_dict.get('original_affine').cpu().detach().numpy()[0]
 
             final_preds = np.expand_dims(preds.argmax(0), 0)
+            transform = tio.Resample(spacing)
+            croporpad = tio.CropOrPad(original_shape)
 
             if original_shape != np.asarray(final_preds.shape):
-                final_preds = resample_label(final_preds, original_shape, True, lowres_axis=np.array([2]), verbose=False)
+                final_preds = croporpad(transform(tio.LabelMap(tensor=final_preds,
+                                                               affine=affine))).numpy()[0]
 
-            self.save_mask(final_preds[0, ...], fname, spacing.astype(np.float64), save_dir)
+            self.save_mask(final_preds, fname, spacing.astype(np.float64), save_dir)
 
         self.test_step_outputs.append({"test/dice": test_dice})
 
