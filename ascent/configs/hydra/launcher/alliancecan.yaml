@@ -10,7 +10,6 @@ setup:
   # access to most of the config tree at the stage when it parses the current config group
   - "rsync -a ${paths.data_dir}/ $SLURM_TMPDIR/ASCENT/data" # copy the dataset to the compute node
   - "export ASCENT_DATA_PATH=$SLURM_TMPDIR/ASCENT/data" # override the previous data path with the path on the compute node
-  - "export NCCL_BLOCKING_WAIT=1"
 
 additional_parameters:
   mail-user: ${oc.env:SLURM_MAIL_USER,null}
