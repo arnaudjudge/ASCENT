@@ -109,37 +109,40 @@ class nnUNetDataset(Dataset):
         mask = nib.load(self.data_path + '/segmentation/' + sub_path.replace("_0000", "")).get_fdata()
         original_shape = np.asarray(list(img.shape))
 
-        # get desired closest divisible shape
-        x = round(img.shape[0] // 32) * 32
-        y = round(img.shape[1] // 32) * 32
         if not self.test:
-            if img.shape[0] * img.shape[1] * img.shape[2] > 10000000:
-                time_len = int(10000000 // (img.shape[0] * img.shape[1]))
+            if img.shape[0] * img.shape[1] * img.shape[2] > 5000000:
+                time_len = int(5000000 // (img.shape[0] * img.shape[1]))
                 start_idx = np.random.randint(low=0, high=img.shape[2] - time_len)
                 img = img[..., start_idx:start_idx + time_len]
                 mask = mask[..., start_idx:start_idx + time_len]
-            z = round(img.shape[2] // 4) * 4
-        else:
-            z = img.shape[2]
 
-        if False: #self.common_spacing is not None:
+        if self.common_spacing is not None:
             transform = tio.Resample(self.common_spacing)
-            croporpad = tio.CropOrPad((x, y, z))
-            img = croporpad(transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))).tensor
+            resampled = transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))
+
+            croporpad = tio.CropOrPad(self.get_desired_size(resampled.shape[1:]))
+            resampled_cropped = croporpad(resampled)
+
+            resampled_affine = resampled_cropped.affine
+            img = resampled_cropped.tensor
             mask = croporpad(transform(tio.LabelMap(tensor=np.expand_dims(mask, 0), affine=img_nifti.affine))).tensor
-            print(f"NEW SHAPE {(x,y,z)}")
         else:
+            xyz_size = self.get_desired_size(img.shape)
             # RESAMPLE NAIVE
-            img = torch.tensor(resample_image(np.expand_dims(img, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False))
-            mask = torch.tensor(resample_label(np.expand_dims(mask, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False))
-            print(f"NEW SHAPE {(x, y, z)}")
+            img = torch.tensor(resample_image(np.expand_dims(img, 0), xyz_size, True, lowres_axis=np.array([2]), verbose=False))
+            mask = torch.tensor(resample_label(np.expand_dims(mask, 0), xyz_size, True, lowres_axis=np.array([2]), verbose=False))
+            # Dummy resampled affine
+            resampled_affine = img_nifti.affine
 
         return {'image': img.type(torch.float32),
                 'label': mask.type(torch.float32),
                 'image_meta_dict': {'case_identifier': self.df.iloc[idx]['dicom_uuid'],
-                                     'original_shape': original_shape,
-                                     'original_spacing': img_nifti.header['pixdim'][1:4],
-                                     'original_affine': img_nifti.affine}}
+                                    'original_shape': original_shape,
+                                    'original_spacing': img_nifti.header['pixdim'][1:4],
+                                    'original_affine': img_nifti.affine,
+                                    'resampled_affine': resampled_affine,
+                                    }
+                }
 
     def get_img_subpath(self, row):
         return f"{row['study']}/{row['view'].lower()}/{row['dicom_uuid']}_0000.nii.gz"
@@ -158,6 +161,15 @@ class nnUNetDataset(Dataset):
         self.common_spacing = spacings / len(idx)
         print(f"ESTIMATED COMMON AVERAGE SPACING: {self.common_spacing}")
 
+    def get_desired_size(self, current_shape, divisible_by=(32, 32, 4)):
+        # get desired closest divisible bigger shape
+        x = int(np.ceil(current_shape[0] / divisible_by[0]) * divisible_by[0])
+        y = int(np.ceil(current_shape[1] / divisible_by[1]) * divisible_by[1])
+        if not self.test:
+            z = int(np.ceil(current_shape[2] / divisible_by[2]) * divisible_by[2])
+        else:
+            z = current_shape[2]
+        return x, y, z
 
 class nnUNetDataModule_no_patch(LightningDataModule):
     """Data module for nnUnet pipeline."""

@@ -39,6 +39,7 @@ class nnUNetPatchlessLitModule(LightningModule):
         sliding_window_len: int = 24,
         sliding_window_overlap: float = 0.5,
         sliding_window_importance_map: bool = "gaussian",
+        common_spacing: [float] = None,
         save_predictions: bool = True,
         save_npz: bool = False,
         name: str = "nnUNet",
@@ -303,6 +304,7 @@ class nnUNetPatchlessLitModule(LightningModule):
 
             fname = properties_dict.get("case_identifier")[0]
             spacing = properties_dict.get("original_spacing").cpu().detach().numpy()[0]
+            resampled_affine = properties_dict.get("resampled_affine").cpu().detach().numpy()[0]
             affine = properties_dict.get('original_affine').cpu().detach().numpy()[0]
 
             final_preds = np.expand_dims(preds.argmax(0), 0)
@@ -311,7 +313,7 @@ class nnUNetPatchlessLitModule(LightningModule):
 
             if original_shape != np.asarray(final_preds.shape):
                 final_preds = croporpad(transform(tio.LabelMap(tensor=final_preds,
-                                                               affine=affine))).numpy()[0]
+                                                               affine=resampled_affine))).numpy()[0]
 
             self.save_mask(final_preds, fname, spacing.astype(np.float64), save_dir)
 

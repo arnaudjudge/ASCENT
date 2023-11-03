@@ -4,6 +4,8 @@ defaults:
 _target_: ascent.models.nnunet_module_no_patch.nnUNetPatchlessLitModule
 name: nnunet_patchless
 
+common_spacing: [0.37, 0.37, 1]
+
 net:
   in_channels: 1
   num_classes: 3
