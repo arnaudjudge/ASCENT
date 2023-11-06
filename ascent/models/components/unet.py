@@ -120,6 +120,7 @@ class UNet(nn.Module):
         )
         self.output_block = self.get_output_block(decoder_level=0)
         self.deep_supervision_heads = self.get_deep_supervision_heads()
+        self.deep_supervision_heads.requires_grad_(False)
         self.apply(self.initialize_weights)
 
     def forward(

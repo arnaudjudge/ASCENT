@@ -128,6 +128,13 @@ class nnUNetPatchlessLitModule(LightningModule):
         )
         return {"loss": loss}
 
+    def on_after_backward(self) -> None:
+        print("on_after_backward enter")
+        for name, p in self.named_parameters():
+            if p.grad is None:
+                print(name)
+        print("on_after_backward exit")
+
     def validation_step(
         self, batch: dict[str, Tensor], batch_idx: int
     ) -> dict[str, Tensor]:  # noqa: D102
