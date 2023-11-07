@@ -125,6 +125,7 @@ class nnUNetPatchlessLitModule(LightningModule):
             prog_bar=True,
             logger=True,
             batch_size=self.trainer.datamodule.hparams.batch_size,
+            sync_dist=True,
         )
         return {"loss": loss}
 
@@ -215,6 +216,7 @@ class nnUNetPatchlessLitModule(LightningModule):
             prog_bar=True,
             logger=True,
             batch_size=self.trainer.datamodule.hparams.batch_size,
+            sync_dist=True,
         )
         self.log(
             "val/dice_MA",
@@ -224,6 +226,7 @@ class nnUNetPatchlessLitModule(LightningModule):
             prog_bar=True,
             logger=True,
             batch_size=self.trainer.datamodule.hparams.batch_size,
+            sync_dist=True,
         )
         for label, dice in zip(range(len(global_dc_per_class)), global_dc_per_class):
             self.log(
@@ -234,6 +237,7 @@ class nnUNetPatchlessLitModule(LightningModule):
                 prog_bar=True,
                 logger=True,
                 batch_size=self.trainer.datamodule.hparams.batch_size,
+                sync_dist=True,
             )
 
     def on_test_start(self) -> None:  # noqa: D102
@@ -296,6 +300,7 @@ class nnUNetPatchlessLitModule(LightningModule):
             prog_bar=True,
             logger=True,
             batch_size=self.trainer.datamodule.hparams.batch_size,
+            sync_dist=True,
         )
 
         if self.hparams.save_predictions:
@@ -340,6 +345,7 @@ class nnUNetPatchlessLitModule(LightningModule):
             prog_bar=False,
             logger=True,
             batch_size=self.trainer.datamodule.hparams.batch_size,
+            sync_dist=True
         )
 
     def on_predict_start(self) -> None:  # noqa: D102
