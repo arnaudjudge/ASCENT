@@ -116,7 +116,8 @@ class AscentTrainer(ABC):
         if cfg.get("test"):
             log.info("Starting testing!")
             trainer_conf = cfg.trainer
-            trainer_conf['strategy'] = 'auto'
+            if trainer_conf.get('strategy'):
+                trainer_conf['strategy'] = 'auto'
             trainer_conf['devices'] = 1
             trainer: Trainer = hydra.utils.instantiate(trainer_conf, callbacks=callbacks, logger=logger)
             if cfg.get("best_model"):
