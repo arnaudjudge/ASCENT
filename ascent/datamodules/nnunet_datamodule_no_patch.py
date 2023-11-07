@@ -1,54 +1,31 @@
 import os
-from collections import OrderedDict
-from pathlib import Path
-from typing import Optional, Union
+from random import shuffle
+from typing import Optional
 
+import nibabel as nib
 import numpy as np
+import pandas as pd
 import torch
-from joblib import Parallel, delayed
+import torchio as tio
 from lightning import LightningDataModule
-from lightning.pytorch.trainer.states import TrainerFn
-from monai.data import CacheDataset, DataLoader, IterableDataset
-from monai.transforms import (
-    Compose,
-    EnsureChannelFirstd,
-    RandAdjustContrastd,
-    RandCropByPosNegLabeld,
-    RandFlipd,
-    RandGaussianNoised,
-    RandGaussianSmoothd,
-    RandRotated,
-    RandScaleIntensityd,
-    RandZoomd,
-    SpatialPadd,
-)
-from sklearn.model_selection import KFold, train_test_split
+from monai.data import DataLoader
+from torch.utils.data import Dataset, random_split
 
 from ascent import utils
-from ascent.preprocessing.preprocessing import resample_image, resample_label
-from ascent.utils.data_loading import get_case_identifiers_from_npz_folders
-from ascent.utils.dataset import nnUNet_Iterator
-from ascent.utils.file_and_folder_operations import load_pickle, save_pickle, subfiles
-from ascent.utils.transforms import Convert2Dto3Dd, Convert3Dto2Dd, LoadNpyd, MayBeSqueezed
-
-import pandas as pd
-from torch.utils.data import Dataset, random_split
-import json
-import nibabel as nib
-import torchio as tio
-from random import shuffle
 
 log = utils.get_pylogger(__name__)
 
 
 class nnUNetDataset(Dataset):
-    def __init__(self, data_path, test_frac=0.1, common_spacing=None, seed=0, test=False, *args,
+    def __init__(self, data_path, test_frac=0.1, common_spacing=None, max_window_len=None,seed=0, test=False, *args,
                  **kwargs):
         super().__init__()
         self.data_path = data_path
         csv_file = self.data_path + '/subset.csv'
         self.df = pd.read_csv(csv_file, index_col=0)
         self.df = self.df[self.df['valid_segmentation'] == True]
+
+        self.max_window_len = max_window_len
 
         # split according to test_frac
         self.test = test
@@ -112,27 +89,24 @@ class nnUNetDataset(Dataset):
         if not self.test:
             if img.shape[0] * img.shape[1] * img.shape[2] > 5000000:
                 time_len = int(5000000 // (img.shape[0] * img.shape[1]))
+                if self.max_window_len:
+                    time_len = min(self.max_window_len, time_len)
                 start_idx = np.random.randint(low=0, high=img.shape[2] - time_len)
                 img = img[..., start_idx:start_idx + time_len]
                 mask = mask[..., start_idx:start_idx + time_len]
 
-        if self.common_spacing is not None:
-            transform = tio.Resample(self.common_spacing)
-            resampled = transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))
+        if self.common_spacing is None:
+            raise Exception("COMMON SPACING IS NONE!")
 
-            croporpad = tio.CropOrPad(self.get_desired_size(resampled.shape[1:]))
-            resampled_cropped = croporpad(resampled)
+        transform = tio.Resample(self.common_spacing)
+        resampled = transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))
 
-            resampled_affine = resampled_cropped.affine
-            img = resampled_cropped.tensor
-            mask = croporpad(transform(tio.LabelMap(tensor=np.expand_dims(mask, 0), affine=img_nifti.affine))).tensor
-        else:
-            xyz_size = self.get_desired_size(img.shape)
-            # RESAMPLE NAIVE
-            img = torch.tensor(resample_image(np.expand_dims(img, 0), xyz_size, True, lowres_axis=np.array([2]), verbose=False))
-            mask = torch.tensor(resample_label(np.expand_dims(mask, 0), xyz_size, True, lowres_axis=np.array([2]), verbose=False))
-            # Dummy resampled affine
-            resampled_affine = img_nifti.affine
+        croporpad = tio.CropOrPad(self.get_desired_size(resampled.shape[1:]))
+        resampled_cropped = croporpad(resampled)
+
+        resampled_affine = resampled_cropped.affine
+        img = resampled_cropped.tensor
+        mask = croporpad(transform(tio.LabelMap(tensor=np.expand_dims(mask, 0), affine=img_nifti.affine))).tensor
 
         return {'image': img.type(torch.float32),
                 'label': mask.type(torch.float32),
@@ -182,6 +156,7 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         batch_size: int = 2,
         patch_size: tuple[int, ...] = (128, 128, 128),
         common_spacing: tuple[float, ...] = None,
+        max_window_len: int = None,
         in_channels: int = 1,
         do_dummy_2D_data_aug: bool = True,
         num_workers: int = os.cpu_count() - 1,
@@ -239,14 +214,18 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         careful not to execute things like random split twice!
         """
         if stage == "fit" or stage is None:
-            train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name, common_spacing=self.hparams.common_spacing)
+            train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name,
+                                           common_spacing=self.hparams.common_spacing,
+                                           max_window_len=self.hparams.max_window_len)
             train_set_size = int(len(train_set_full) * 0.9)
             valid_set_size = len(train_set_full) - train_set_size
             self.data_train, self.data_val = random_split(train_set_full, [train_set_size, valid_set_size])
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test" or stage is None:
-            self.data_test = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name, test=True, common_spacing=self.hparams.common_spacing)
+            self.data_test = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name,
+                                           test=True,
+                                           common_spacing=self.hparams.common_spacing)
 
     def train_dataloader(self) -> DataLoader:  # noqa: D102
         return DataLoader(
@@ -282,7 +261,12 @@ class nnUNetDataModule_no_patch(LightningDataModule):
 
 
 if __name__ == "__main__":
-    dl = nnUNetDataModule_no_patch('/data/ascent_data/subset_3/', common_spacing=(0.4302, 0.4302, 1.0), dataset_name='', num_workers=1, batch_size=1)
+    dl = nnUNetDataModule_no_patch('/data/ascent_data/subset_3/',
+                                   common_spacing=(0.37, 0.37, 1.0),
+                                   max_window_len=4,
+                                   dataset_name='',
+                                   num_workers=1,
+                                   batch_size=1)
 
     dl.setup()
     for batch in iter(dl.train_dataloader()):
@@ -290,8 +274,8 @@ if __name__ == "__main__":
         print(batch['label'].shape)
 
         from matplotlib import pyplot as plt
-        plt.imshow(batch['image'][0, 0, :, :, 5])
+        plt.imshow(batch['image'][0, 0, :, :, 1].T)
 
         plt.figure()
-        plt.imshow(batch['label'][0, 0, :, :, 5])
+        plt.imshow(batch['label'][0, 0, :, :, 1].T)
         plt.show()
