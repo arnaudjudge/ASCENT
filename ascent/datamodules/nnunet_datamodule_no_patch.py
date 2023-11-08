@@ -17,8 +17,15 @@ log = utils.get_pylogger(__name__)
 
 
 class nnUNetDataset(Dataset):
-    def __init__(self, data_path, test_frac=0.1, common_spacing=None, max_window_len=None,seed=0, test=False, *args,
-                 **kwargs):
+    def __init__(self,
+                 data_path,
+                 test_frac=0.1,
+                 common_spacing=None,
+                 max_window_len=None,
+                 use_dataset_fraction=1.0,
+                 seed=0,
+                 test=False,
+                 *args, **kwargs):
         super().__init__()
         self.data_path = data_path
         csv_file = self.data_path + '/subset.csv'
@@ -67,6 +74,9 @@ class nnUNetDataset(Dataset):
                                                            'di-E8E1-1DE6-D3C5', 'di-EBAE-B9BC-F90B', 'di-EDC8-A514-F22A',
                                                            'di-EEB9-0133-4633', 'di-F2FF-397C-F62E', 'di-F33B-7A20-0BDF',
                                                            'di-F967-7E77-AF69'])]
+            if use_dataset_fraction < 1.0:
+                print("HELLO")
+                self.df = self.df.sample(frac=use_dataset_fraction)
 
         print(f"Test step: {test} , len of dataset {len(self.df)}")
 
@@ -157,6 +167,7 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         patch_size: tuple[int, ...] = (128, 128, 128),
         common_spacing: tuple[float, ...] = None,
         max_window_len: int = None,
+        use_dataset_fraction: float = 1.0,
         in_channels: int = 1,
         do_dummy_2D_data_aug: bool = True,
         num_workers: int = os.cpu_count() - 1,
@@ -216,7 +227,8 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         if stage == "fit" or stage is None:
             train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name,
                                            common_spacing=self.hparams.common_spacing,
-                                           max_window_len=self.hparams.max_window_len)
+                                           max_window_len=self.hparams.max_window_len,
+                                           use_dataset_fraction=self.hparams.use_dataset_fraction)
             train_set_size = int(len(train_set_full) * 0.9)
             valid_set_size = len(train_set_full) - train_set_size
             self.data_train, self.data_val = random_split(train_set_full, [train_set_size, valid_set_size])
