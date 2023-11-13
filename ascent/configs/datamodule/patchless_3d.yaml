@@ -7,3 +7,4 @@ do_dummy_2D_data_aug: True
 num_workers: 12
 common_spacing: [0.37, 0.37, 1]
 max_window_len: null
+max_batch_size: null

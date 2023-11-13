@@ -23,6 +23,7 @@ class nnUNetDataset(Dataset):
                  common_spacing=None,
                  max_window_len=None,
                  use_dataset_fraction=1.0,
+                 max_batch_size=None,
                  seed=0,
                  test=False,
                  *args, **kwargs):
@@ -33,6 +34,11 @@ class nnUNetDataset(Dataset):
         self.df = self.df[self.df['valid_segmentation'] == True]
 
         self.max_window_len = max_window_len
+        self.max_batch_size = max_batch_size
+        if self.max_batch_size and self.max_batch_size > 10:
+            print("WARNING: max_batch_size set to a large number, "
+                  "behavior is set to use largest batch possible "
+                  "if max_batch_size is larger than max calculated length")
 
         # split according to test_frac
         self.test = test
@@ -90,33 +96,52 @@ class nnUNetDataset(Dataset):
         return len(self.df.index)
 
     def __getitem__(self, idx):
+        # Get paths and open images
         sub_path = self.get_img_subpath(self.df.iloc[idx])
         img_nifti = nib.load(self.data_path + '/img/' + sub_path)
         img = img_nifti.get_fdata() / 255
         mask = nib.load(self.data_path + '/segmentation/' + sub_path.replace("_0000", "")).get_fdata()
         original_shape = np.asarray(list(img.shape))
 
+        # limit size of tensor so it can fit on GPU
         if not self.test:
             if img.shape[0] * img.shape[1] * img.shape[2] > 5000000:
                 time_len = int(5000000 // (img.shape[0] * img.shape[1]))
-                if self.max_window_len:
-                    time_len = min(self.max_window_len, time_len)
-                start_idx = np.random.randint(low=0, high=img.shape[2] - time_len)
-                img = img[..., start_idx:start_idx + time_len]
-                mask = mask[..., start_idx:start_idx + time_len]
+                img = img[..., :time_len]
+                mask = mask[..., :time_len]
 
+        # transforms and resampling
         if self.common_spacing is None:
             raise Exception("COMMON SPACING IS NONE!")
-
         transform = tio.Resample(self.common_spacing)
         resampled = transform(tio.ScalarImage(tensor=np.expand_dims(img, 0), affine=img_nifti.affine))
 
         croporpad = tio.CropOrPad(self.get_desired_size(resampled.shape[1:]))
         resampled_cropped = croporpad(resampled)
-
         resampled_affine = resampled_cropped.affine
         img = resampled_cropped.tensor
         mask = croporpad(transform(tio.LabelMap(tensor=np.expand_dims(mask, 0), affine=img_nifti.affine))).tensor
+
+        if not self.test:
+            if self.max_window_len:
+                # use partial time window, create as many batches as possible with it unless self.max_batch_size not set
+                dynamic_batch_size = img.shape[-1] // self.max_window_len \
+                    if not self.max_batch_size or not (self.max_batch_size > 0 and
+                                                      (self.max_batch_size * self.max_window_len) < img.shape[-1]) \
+                    else self.max_batch_size
+                b_img = []
+                b_mask = []
+                for i in range(dynamic_batch_size):
+                    start_idx = np.random.randint(low=0, high=img.shape[-1] - self.max_window_len)
+                    b_img += [img[..., start_idx:start_idx + self.max_window_len]]
+                    b_mask += [mask[..., start_idx:start_idx + self.max_window_len]]
+                img = torch.stack(b_img)
+                mask = torch.stack(b_mask)
+            else:
+                # use entire available time window
+                # must unsqueeze to accommodate code in train/val step
+                img = img.unsqueeze(0)
+                mask = mask.unsqueeze(0)
 
         return {'image': img.type(torch.float32),
                 'label': mask.type(torch.float32),
@@ -155,6 +180,7 @@ class nnUNetDataset(Dataset):
             z = current_shape[2]
         return x, y, z
 
+
 class nnUNetDataModule_no_patch(LightningDataModule):
     """Data module for nnUnet pipeline."""
 
@@ -167,6 +193,7 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         patch_size: tuple[int, ...] = (128, 128, 128),
         common_spacing: tuple[float, ...] = None,
         max_window_len: int = None,
+        max_batch_size: int = None,
         use_dataset_fraction: float = 1.0,
         in_channels: int = 1,
         do_dummy_2D_data_aug: bool = True,
@@ -228,7 +255,8 @@ class nnUNetDataModule_no_patch(LightningDataModule):
             train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name,
                                            common_spacing=self.hparams.common_spacing,
                                            max_window_len=self.hparams.max_window_len,
-                                           use_dataset_fraction=self.hparams.use_dataset_fraction)
+                                           use_dataset_fraction=self.hparams.use_dataset_fraction,
+                                           max_batch_size=self.hparams.max_batch_size)
             train_set_size = int(len(train_set_full) * 0.9)
             valid_set_size = len(train_set_full) - train_set_size
             self.data_train, self.data_val = random_split(train_set_full, [train_set_size, valid_set_size])
@@ -276,18 +304,21 @@ if __name__ == "__main__":
     dl = nnUNetDataModule_no_patch('/data/ascent_data/subset_3/',
                                    common_spacing=(0.37, 0.37, 1.0),
                                    max_window_len=4,
+                                   max_batch_size=2,
                                    dataset_name='',
                                    num_workers=1,
                                    batch_size=1)
 
     dl.setup()
     for batch in iter(dl.train_dataloader()):
-        print(batch['image'].shape)
-        print(batch['label'].shape)
+        bimg = batch['image'].squeeze(0)
+        blabel = batch['label'].squeeze(0)
+        print(bimg.shape)
+        print(blabel.shape)
 
         from matplotlib import pyplot as plt
-        plt.imshow(batch['image'][0, 0, :, :, 1].T)
+        plt.imshow(bimg[0, 0, :, :, 1].T)
 
         plt.figure()
-        plt.imshow(batch['label'][0, 0, :, :, 1].T)
+        plt.imshow(blabel[0, 0, :, :, 1].T)
         plt.show()

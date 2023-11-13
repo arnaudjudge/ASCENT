@@ -111,7 +111,8 @@ class nnUNetPatchlessLitModule(LightningModule):
     def training_step(
         self, batch: dict[str, Tensor], batch_idx: int
     ) -> dict[str, Tensor]:  # noqa: D102
-        img, label = batch["image"], batch["label"]
+        # make sure to squeeze first dimension since batch comes from only one image
+        img, label = batch["image"].squeeze(0), batch["label"].squeeze(0)
 
         # Need to handle carefully the multi-scale outputs from deep supervision heads
         pred = self.forward(img)
@@ -132,7 +133,8 @@ class nnUNetPatchlessLitModule(LightningModule):
     def validation_step(
         self, batch: dict[str, Tensor], batch_idx: int
     ) -> dict[str, Tensor]:  # noqa: D102
-        img, label = batch["image"], batch["label"]
+        # squeeze first dim since batch comes from only one image
+        img, label = batch["image"].squeeze(0), batch["label"].squeeze(0)
 
         # Only the highest resolution output is returned during the validation
         pred = self.forward(img)
