@@ -234,6 +234,16 @@ class nnUNetPatchlessLitModule(LightningModule):
                 batch_size=self.trainer.datamodule.hparams.batch_size,
                 sync_dist=True,
             )
+        self.log(
+            f"val/mean_dice",
+            np.mean(global_dc_per_class),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+            batch_size=self.trainer.datamodule.hparams.batch_size,
+            sync_dist=True,
+        )
 
     def on_test_start(self) -> None:  # noqa: D102
         super().on_test_start()
