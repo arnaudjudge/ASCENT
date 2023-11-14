@@ -3,6 +3,7 @@ defaults:
   - model_summary
   - rich_progress_bar
   - learning_rate_monitor
+  - early_stopping
   - _self_
 
 model_checkpoint:
@@ -12,6 +13,12 @@ model_checkpoint:
   mode: "min"
   save_last: True
   auto_insert_metric_name: False
+
+early_stopping:
+  _target_: lightning.pytorch.callbacks.EarlyStopping
+  monitor: val/loss
+  patience: 15
+  mode: "min"
 
 model_summary:
   max_depth: -1
