@@ -3,7 +3,7 @@
 defaults:
   - override /datamodule: patchless_3d
   - override /model: patchless_3d
-  - override /callbacks: nnunet
+  - override /callbacks: nnunet_patchless
   - override /logger: wandb
   - override /trainer: nnunet
   - override /hydra: nnunet
