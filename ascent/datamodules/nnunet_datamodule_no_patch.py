@@ -81,7 +81,6 @@ class nnUNetDataset(Dataset):
                                                            'di-EEB9-0133-4633', 'di-F2FF-397C-F62E', 'di-F33B-7A20-0BDF',
                                                            'di-F967-7E77-AF69'])]
             if use_dataset_fraction < 1.0:
-                print("HELLO")
                 self.df = self.df.sample(frac=use_dataset_fraction)
 
         print(f"Test step: {test} , len of dataset {len(self.df)}")

@@ -369,13 +369,7 @@ class nnUNetPatchlessLitModule(LightningModule):
         )
 
     def predict_step(self, batch: dict[str, Tensor], batch_idx: int):  # noqa: D102
-        img, image_meta_dict = batch["image"], batch["image_meta_dict"]
-
-        img_numpy = img.cpu().detach().numpy()[0, 0, ...]
-        x = round(img_numpy.shape[0] // 32) * 32
-        y = round(img_numpy.shape[1] // 32) * 32
-        z = img_numpy.shape[2]
-        img = torch.tensor(np.expand_dims(resample_image(np.expand_dims(img_numpy, 0), (x, y, z), True, lowres_axis=np.array([2]), verbose=False), 0)).type_as(img)
+        img, properties_dict = batch["image"], batch["image_meta_dict"]
 
         self.patch_size = list([img.shape[-3], img.shape[-2], self.hparams.sliding_window_len])
         self.inferer.roi_size = self.patch_size
@@ -384,52 +378,29 @@ class nnUNetPatchlessLitModule(LightningModule):
         preds = self.tta_predict(img) if self.hparams.tta else self.predict(img)
         print(f"\nPrediction took {round(time.time() - start_time, 4)} (s).")
 
-        properties_dict = self.get_properties(image_meta_dict)
-
         preds = preds.squeeze(0).cpu().detach().numpy()
-        original_shape = properties_dict.get("original_shape")
+        original_shape = properties_dict.get("original_shape").cpu().detach().numpy()[0]
         if len(preds.shape[1:]) == len(original_shape) - 1:
             preds = preds[..., None]
-        if properties_dict.get("resampling_flag"):
-            shape_after_cropping = properties_dict.get("shape_after_cropping")
 
-            if check_anisotropy(properties_dict.get("original_spacing")):
-                anisotropy_flag = True
-                axis = get_lowres_axis(properties_dict.get("original_spacing"))
-            elif check_anisotropy(properties_dict.get("spacing_after_resampling")):
-                anisotropy_flag = True
-                axis = get_lowres_axis(properties_dict.get("spacing_after_resampling"))
-            else:
-                anisotropy_flag = False
-                axis = None
+        fname = properties_dict.get("case_identifier")
+        spacing = properties_dict.get("original_spacing").cpu().detach().numpy()[0]
+        resampled_affine = properties_dict.get("resampled_affine").cpu().detach().numpy()[0]
+        affine = properties_dict.get('original_affine').cpu().detach().numpy()[0]
 
-            if axis is not None:
-                if len(axis) == 2:
-                    # this happens for spacings like (0.24, 1.25, 1.25) for example. In that case
-                    # we do not want to resample separately in the out of plane axis
-                    anisotropy_flag = False
+        final_preds = np.expand_dims(preds.argmax(0), 0)
+        transform = tio.Resample(spacing)
+        croporpad = tio.CropOrPad(original_shape)
 
-            preds = resample_image(preds, shape_after_cropping, anisotropy_flag, axis, 1, 0)
-
-        box_start, box_end = properties_dict.get("crop_bbox")
-        min_w, min_h, min_d = box_start
-        max_w, max_h, max_d = box_end
-
-        final_preds = np.zeros([preds.shape[0], *original_shape])
-        final_preds[:, min_w:max_w, min_h:max_h, min_d:max_d] = preds
+        if original_shape != np.asarray(final_preds.shape):
+            final_preds = croporpad(transform(tio.LabelMap(tensor=final_preds,
+                                                           affine=resampled_affine))).numpy()[0]
 
         save_dir = os.path.join(self.trainer.default_root_dir, "inference_raw")
 
-        fname = properties_dict.get("case_identifier")
-        spacing = properties_dict.get("original_spacing")
-
-        if self.hparams.save_npz:
-            self.save_npz_and_properties(final_preds, properties_dict, fname, save_dir)
-
-        final_preds = final_preds.argmax(0)
-
         if self.hparams.save_predictions:
             self.save_mask(final_preds, fname, spacing, save_dir)
+
         return final_preds
 
     def configure_optimizers(self) -> dict[Literal["optimizer", "lr_scheduler"], Any]:
