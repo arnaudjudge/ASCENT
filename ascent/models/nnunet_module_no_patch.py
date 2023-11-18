@@ -391,7 +391,8 @@ class nnUNetPatchlessLitModule(LightningModule):
         final_preds = np.expand_dims(preds.argmax(0), 0)
         transform = tio.Resample(spacing)
         croporpad = tio.CropOrPad(original_shape)
-
+        print(final_preds.shape)
+        print(original_shape)
         if original_shape != np.asarray(final_preds.shape):
             final_preds = croporpad(transform(tio.LabelMap(tensor=final_preds,
                                                            affine=resampled_affine))).numpy()[0]
