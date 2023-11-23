@@ -19,6 +19,7 @@ log = utils.get_pylogger(__name__)
 class nnUNetDataset(Dataset):
     def __init__(self,
                  data_path,
+                 csv_file_name='subset.csv',
                  test_frac=0.1,
                  common_spacing=None,
                  max_window_len=None,
@@ -29,7 +30,7 @@ class nnUNetDataset(Dataset):
                  *args, **kwargs):
         super().__init__()
         self.data_path = data_path
-        csv_file = self.data_path + '/subset.csv'
+        csv_file = self.data_path + '/' + csv_file_name
         self.df = pd.read_csv(csv_file, index_col=0)
         self.df = self.df[self.df['valid_segmentation'] == True]
 
@@ -187,6 +188,7 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         self,
         data_dir: str = "data/",
         dataset_name: str = "CAMUS",
+        csv_file_name: str = "subset.csv",
         fold: int = 0,
         batch_size: int = 2,
         patch_size: tuple[int, ...] = (128, 128, 128),
@@ -252,6 +254,7 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         """
         if stage == "fit" or stage is None:
             train_set_full = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name,
+                                           csv_file_name=self.hparams.csv_file_name,
                                            common_spacing=self.hparams.common_spacing,
                                            max_window_len=self.hparams.max_window_len,
                                            use_dataset_fraction=self.hparams.use_dataset_fraction,
@@ -263,6 +266,7 @@ class nnUNetDataModule_no_patch(LightningDataModule):
         # Assign test dataset for use in dataloader(s)
         if stage == "test" or stage is None:
             self.data_test = nnUNetDataset(self.hparams.data_dir + '/' + self.hparams.dataset_name,
+                                           csv_file_name=self.hparams.csv_file_name,
                                            test=True,
                                            common_spacing=self.hparams.common_spacing)
 

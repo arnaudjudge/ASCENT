@@ -3,6 +3,7 @@ defaults:
 
 batch_size: 1
 dataset_name: subset_3
+csv_file_name: subset.csv
 do_dummy_2D_data_aug: True
 num_workers: 12
 common_spacing: [0.37, 0.37, 1]
